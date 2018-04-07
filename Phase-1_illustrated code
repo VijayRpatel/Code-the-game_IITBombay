@@ -1,0 +1,299 @@
+Cricket is an unpredictable game where fortunes can change in a matter of time.
+Some of the important information from the pre-match analysis of the given match(MI vs KKR, IPL'17 match 07, 1st innings)are-
+1)Two of the four batsmen Harbhajan has dismissed most often in the IPL (four times) are Gautam Gambhir and Manish Pandey.Both Pandey (6.00) and Gambhir (6.46) score at less than seven an over against Harbhajan.
+2)Lynn has a run-rate of 4.90 against left-arm spin and 3.33 against right-arm spin in the Powerplays. He's been dismissed thrice by left-arm spinners in the Powerplays.
+3)Chris Lynn can be destructive against right-arm pace - he has scored at a run rate of 10.93 against them - but hasn't been as good against other kinds of bowling - left-arm pace (7.93), left-arm spin (6.16) and right-arm spin (7.05).
+4)Since the start of the 2015 season, the last-five-overs run rate at the Wankhede is 11.59, the second-most of all IPL venues behind Brabourne Stadium (12.16).
+5)Uthappa v Harbhajan - 75 runs off 43 balls (SR of 174.4), 2 dismissals.
+6)At this venue in 2016, spinners took 16 wickets at 20.12, economy of 7.00, as opposed to pacers who took 26 wickets at 34.30, economy of 8.52.
+```{r}
+#Required libraries
+library(RCurl)
+library(httr)
+library(ggplot2)
+library(plotly)
+```
+
+Reading in the data - 
+```{r}
+data <- read.csv("MatchData.csv", stringsAsFactors = FALSE)
+
+#Structure of Data
+str(data)
+```
+
+We are using the Watson's Natural Language Understanding (previously Alchemy) API service to get the emotional values from the commentary of each event which may help us in our analysis.
+Watson Natural Language Understanding(NLU) API call- 
+```{r}
+#Credentials of Natural Language Understanding for authentication
+url_NLU="https://gateway.watsonplatform.net/natural-language-understanding/api"
+username_NLU = "ee9537c2-30bd-401d-8a75-299a9a0d3057"
+password_NLU = "pojdcPCZmGHv"
+version="?version=2017-02-27"
+
+#Defining function to extract emotion values through NLU
+emotion <- function(x){
+  raw_text <- x
+  text <- URLencode(raw_text)
+  
+  response <- POST(url=paste(
+    url_NLU,
+    "/v1/analyze",
+    version,
+    "&text=",text,
+    "&features=emotion",
+    "&emotion.document=true",
+    sep=""),
+    authenticate(username_NLU,password_NLU),
+    add_headers("Content-Type"="application/json")
+  )
+  signal <- content(response)
+  values <- c(signal$emotion$document$emotion$sadness,
+              signal$emotion$document$emotion$joy,
+              signal$emotion$document$emotion$fear,
+              signal$emotion$document$emotion$disgust,
+              signal$emotion$document$emotion$anger)
+  
+  }
+
+emotions <-lapply(data$Commentary, emotion)
+emotions_df <- data.frame(emotions)
+trans <- t(emotions_df)
+row.names(trans) <- seq(1,128,1)
+colnames(trans) <- c("sadness", "joy", "fear", "disgust", "anger")
+
+#Merge the two dataframes to get the complete dataframe 
+data <- cbind(data, trans)
+
+#View first 6 entries
+head(data)
+```
+
+Next we extract the Batsman and Bowler from the events and remove already available information from the commentary such as the runs scored and the name of the Bowler and Batsman. We also calculate the length of commentary here as it can be decisive in getting hold of the events which cannot be obtained mathematically such as missed runouts, drop catches, good fielding performances etc.
+The more the length of the commentary the more is the possiblity that the event was a significant one. The regular balls will have a single line commentary.
+```{r}
+library(ngram)
+
+for(i in 1:128){
+  #Extracting Bowler and Batsman
+  presplit <- gsub('(,.*)', '', data$Commentary[i])
+  split <- strsplit(presplit, " to ")
+  data$Bowler[i] <- split[[1]][1]
+  data$Batsman[i] <- split[[1]][2]
+  #Removing already available information
+  separate <- strsplit(data$Commentary[i], split = ", ")
+  data$Commentary[i] <- paste(separate[[1]][-c(1,2)], sep = ", ",collapse = ", ")
+  #Length 
+  data$length[i] <- wordcount(data$Commentary[i], sep = " ", count.function =      sum)
+}
+```
+
+
+RunRate after each Ball-
+```{r}
+for(i in 1:128){
+  data$score[i] <- sum(data$Runs[1:i])
+}
+
+for(i in 1:128){
+  if(data$Extra[i]==0){
+    x=data$Ball[i]
+    y=((6*(x%/%1))+((x%%1)*10))/6
+    data$RunRate[i]<- data$score[i]/y
+  }
+  else{
+    for(j in (i-1):1){
+      if(data$Extra[j]==0){
+        x=data$Ball[j]
+        y=((6*(x%/%1))+((x%%1)*10))/6
+        data$RunRate[i]<- data$score[i]/y
+        break
+      }
+    }
+  }
+}
+
+```
+
+```{r}
+ggplot(data)+geom_line(data=data, aes(x=ID,y=RunRate, color=RunRate), size=1.4)+
+  scale_color_gradient(high = "red", low="blue")+
+  geom_point(data=data[data$Wicket!=0,],aes(x=ID,y=RunRate),size=3)+
+  labs(x="Events Count", y="Run Rate", title="KKR's Run Rate")+
+  theme(panel.background = element_rect(fill = "aliceblue",colour="lightblue1"))+
+  theme(plot.background = element_rect(fill = "lightcyan"))
+```
+
+(Analysis on the basis of knowledge of cricket)
+Wickets are most important event in a cricket match it has much more impact than boundaries a single wicket during crucial period can change the course of match 
+Sorting out wickets from data 
+```{r}
+wicket <- which(data$Wicket != 0)
+```
+Boundaries play an important role in a cricket match.  boundaries boost confidence of 
+batsman and help them to dominate over bowler. An over with 2-3 boundaries can act as decider,even a boundary on first ball of the over creates an pressure on bowler
+Sorting boundaries from data 
+```{r}
+boundary <- which(data$Runs >= 4) 
+```
+
+```{r}
+ggplot(data, aes(x=ID,y=Runs,fill=Runs))+geom_col()+
+  scale_fill_gradient(high = "gold", low = "limegreen")+
+  geom_col(data=data[data$Extra!=0,], aes(x=ID, y=Runs, color="red"), fill="red")+
+  geom_point(data=data[data$Wicket!=0,], aes(x=ID,y=Runs), size=2)+
+  theme(panel.background = element_rect(fill = "lightcyan1", colour = "lightcyan3"))+
+  labs(x="Events Count", y="Runs", title="Runs scored per Event")+
+  theme(plot.background = element_rect(fill = "lightcyan2"))+
+  scale_color_manual(labels = c("Extra"), values = c("red"))
+```
+
+extras not only gives runs but also an extrab ball is need to be thrown 
+```{r}
+consecutive <- NULL
+for(i in 1:128){
+  if(data$Extra[i]!=0){
+    if(data$Extra[i-1]!=0){consecutive <- c(i, consecutive)}
+  }
+}
+consecutive
+```
+
+(analysis on the basis of pre match stats)
+Harbhajan against Gambhir, Pandey and Uthappa(intro point 1&5)-
+```{r}
+data[which(data$Bowler == "Harbhajan Singh" & data$Batsman == "Gambhir"),]
+
+data[which(data$Bowler == "Harbhajan Singh" & data$Batsman == "Pandey"),]
+
+data[which(data$Bowler == "Harbhajan Singh" & data$Batsman == "Uthappa"),]
+```
+(Gambhir and Uthappa dx not face Harbhajan and Pandey has a difficulty in scoring against Harbhajan but hits a 4 which has already been counted in boundaries) 
+
+(intro point 2)
+(left arm slow - KH pandya should be brought against Lynn)
+```{r}
+data[which(data$Ball <=5.6 & data$Batsman == "Lynn" & data$Bowler == "KH Pandya"),]
+```
+
+(Wankhede, intro point 4)
+```{r}
+ggplot(data[(data$Ball >14.6),], aes(x=ID,y=Runs, fill=Runs))+geom_col()+
+  geom_text(aes(label=Ball), vjust=-0.4, size=2.5)+
+  theme(panel.background = element_rect(fill = "aliceblue", colour = "lightcyan3"))+
+  labs(x="Events Count", y="Runs", title="Runs scored after 15th Over")+
+  theme(plot.background = element_rect(fill = "aliceblue"))
+```
+In final overs each team try to score as more as possible runs here dot ball in final overs create an extra pressure on batsman  so dot balls play a crucial role in final overs 
+```{r}
+dot_after15 <- which(data$Runs == 0 & data$Ball > 14.6)
+```
+
+Manish Pandey played an important role in KKR's inning. Apart from scoring maximum runs for team he was notout till end and in final overs with support of tailenders he tried to score as much as possible runs in last 5 overs
+sorting out innings of Manish Pandey
+```{r}
+pandeyAll<- subset(data, data$Batsman=="Pandey")
+PandeyBalls<- 0
+pandeyRuns<- 0
+for(i in 1:48){
+  PandeyBalls<- PandeyBalls+1
+  pandeyRuns<- pandeyAll$Runs[i]+ pandeyRuns
+  if(pandeyAll$Extra[i]=="1w"){
+    PandeyBalls<- PandeyBalls-1
+  }
+  if(pandeyAll$Extra[i]!=0){
+    pandeyRuns<- pandeyRuns-1
+  }
+  pandeyAll$runsCount[i]<- pandeyRuns
+  pandeyAll$ballsCount[i]<- PandeyBalls
+  pandeyAll$StrikeRate[i]<- 100*pandeyRuns/PandeyBalls
+}
+```
+
+```{r}
+p4<-ggplot(data=pandeyAll, aes(x=ballsCount, y=runsCount, color=I("firebrick2")))+geom_line(size=1)+
+  geom_vline(pandeyAll, xintercept = 30, colour="firebrick4")+
+  geom_hline(pandeyAll, yintercept = 35, colour="firebrick4" )+
+  theme(panel.background = element_rect(fill = "aliceblue"))+
+  theme(plot.background = element_rect(fill = I("aliceblue")))+
+  labs(x="Balls faced by Manish Pandey",y="Runs scored", title="Manish Pandey's Scoring rate")
+ggplotly(p4)
+
+p<-ggplot(data=pandeyAll, aes(x=ballsCount, y=StrikeRate, color=I("aquamarine1")))+geom_line(size=1.3)+ 
+  geom_line(data=pandeyAll[pandeyAll$StrikeRate>=100,],aes(color=I("deepskyblue")),size=1.3)+
+  theme(panel.background = element_rect(fill = "aliceblue", colour = I("darkblue")))+
+  labs(x="Balls Faced by Pandey", y="Strike Rate", colour="Strike rate")+
+  theme(plot.background = element_rect(fill = I("aliceblue")))+
+  scale_color_manual(labels = c("Less than 100", "Greater than 100"), values = c(I("aquamarine1"), I("deepskyblue")))
+ggplotly(p)
+```
+A good partnership creates a proper foundation for batting team with more wickets in hand batting team can play more freely in last final overs also a good partnership for initial wickets  helps to gain momentum for batting team and they can score more runs during middle overs 
+```{r}
+partnership <- NULL
+for(i in 1:7){
+  ifelse(i==1,
+         partnership[i] <- sum(data$Runs[1:which(data$Wicket==i)]),
+         partnership[i] <- sum(data$Runs[which(data$Wicket==(i-1)):which(data$Wicket==i)]))
+}
+
+barplot(partnership,col="midnightblue", names.arg = c("1st","2nd","3rd","4th","5th","6th","7th"),
+        xlab="Partnership for Wicket :", ylab = "Runs Scored", border="green",xlim = c(-6,15), main = "Partnerships")
+```
+
+```{r}
+#order of wickets 
+data$Batsman[wicket]
+```
+
+When only one proper batsman is left and rest are tailenders it is important that most of the strike should be given to batsman so in this innings pandey was last proper batsman so balls in which pandey got strike are important .
+Sorting balls in which pandey got strike 
+```{r}
+strike <- NULL
+for(i in 103:128)
+{
+  if(data$Batsman[i] == "Pandey" & (data$Runs[i-1] == 1 | data$Runs[i-1] == 2) & data$Extra[i-1] == 0){
+    strike<-c(i-1,strike)
+  } 
+}
+```
+
+Events uptill now -
+```{r}
+events <- unique(c(wicket, boundary, consecutive, dot_after15, strike))
+
+```
+Commentary play an important role in deciding importance of ball  if an important event occurs it gives detailed information  about event so depending upon length of commentary we can decide importance of an event so now we will list out top 50 events and will remove events like sixes fours and wicket and will now sort rest of events on basis of length of commentary these will include events like drop catches misfield runout chances etc.
+
+```{r}
+summary(data$length)
+
+sub <- subset(data, length > 28)
+
+for(i in 1:32){
+  if(sub$ID[i] %in% events){
+    sub[i,] <- NA 
+  }
+}
+ 
+sub <- na.omit(sub)
+sub
+```
+
+On analysing these events, Event id = 110, 127 seem to be not so important since 127 - Pandey loses strike, after he already had scored 22 of the over till that ball
+110 - Woakes not being a batsman neither hits a boundary nor gives strike to pandey 
+so removing them and taking top 13 commentary to get the 50 impactful events
+```{r}
+sub <- sub[!(sub$ID==127 | sub$ID==110),]
+
+sub<- sub[sort.list(sub$length, decreasing = TRUE),]
+sub <- sub[1:13,]
+sub
+```
+
+```{r}
+topComments<- sub$ID
+
+events <- c(events,topComments)
+events
+```
+Using the above framework, 50 most impactful events of any match/innings can be identified.
